@@ -6,7 +6,7 @@
 SCRIPT_VERSION="2.0.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/dragonwilds-manager.conf"
+CONFIG_FILE="${SCRIPT_DIR}/dragonwilds-manager.conf"
 
 DEFAULT_COMPOSE_DIR="${HOME}/repos/runescape-dragonwilds-server-docker"
 DEFAULT_UPDATE_CHECK_TIME="03:00"
