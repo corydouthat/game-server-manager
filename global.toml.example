@@ -1,0 +1,10 @@
+# Copy to global.toml and `chmod 640 global.toml` (it holds your bot token).
+
+# Optional: label shown in notifications (defaults to the hostname)
+# host_label = "nuc-main"
+
+[telegram]
+# Create a bot with @BotFather; get chat_id by messaging the bot, then opening
+# https://api.telegram.org/bot<token>/getUpdates
+bot_token = ""
+chat_id = ""

@@ -1,5 +1,11 @@
-# Config files — may contain secrets or local paths; use *.conf.example as templates
+# Config files — may contain secrets or local paths; use *.example as templates
 *.conf
+global.toml
+instances/*.toml
+
+# Python
+__pycache__/
+*.pyc
 
 # Server directories (binaries, worlds, player data)
 minecraft-bedrock-server/

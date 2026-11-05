@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""game-server-manager — manage, monitor and update game servers.
+
+  gsm list                         List configured instances and their status
+  gsm notify <message...>          Send a message through the Telegram relay
+  gsm install-service              Install the gsm@.service systemd user unit
+  gsm <instance> <command> [args]  Run a command for one instance (see 'gsm <instance> help')
+"""
+
+import importlib
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from gsm_core import config  # noqa: E402
+from gsm_core.log import Log  # noqa: E402
+from gsm_core.monitor import Monitor  # noqa: E402
+from gsm_core.notify import Notifier  # noqa: E402
+
+VERSION = "1.0.0"
+
+
+def make_adapter(name: str):
+    cfg = config.load_instance(name)
+    log_path = Path(cfg.get("log_file") or config.state_dir(name) / f"{name}.log").expanduser()
+    log = Log(name, log_path)
+    notifier = Notifier(config.load_global(), log=log)
+    module = importlib.import_module(f"gsm_core.adapters.{cfg['adapter']}")
+    return module.Adapter(cfg, log, notifier)
+
+
+def cmd_list() -> int:
+    names = config.list_instances()
+    if not names:
+        print(f"No instances. Copy one of {config.INSTANCES_DIR}/*.toml.example to <name>.toml")
+        return 1
+    for n in names:
+        try:
+            a = make_adapter(n)
+            state = "HELD" if a.hold_file.exists() else ("RUNNING" if a.is_running() else "STOPPED")
+            print(f"{n:<20} {state:<8} {a.cfg['adapter']:<18} {a.current_version()}")
+        except Exception as e:  # noqa: BLE001
+            print(f"{n:<20} ERROR    {e}")
+    return 0
+
+
+def cmd_install_service() -> int:
+    src = Path(__file__).resolve().parent / "systemd" / "gsm@.service"
+    dest = Path.home() / ".config" / "systemd" / "user" / "gsm@.service"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(src.read_text().replace("@GSM@", str(Path(__file__).resolve())))
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    print(f"Installed {dest}")
+    print("Enable an instance:   systemctl --user enable --now gsm@<instance>")
+    print("Start at boot without logging in (one time):   loginctl enable-linger $USER")
+    return 0
+
+
+def instance_help(a) -> None:
+    print(f"Usage: gsm {a.instance} <command>\n")
+    rows = [
+        ("start", "Start the server (clears a hold)"),
+        ("stop", "Stop the server and hold it down (monitor won't restart it)"),
+        ("restart", "Stop and start the server"),
+        ("status", "Show running status and version"),
+        ("update", "Update now if a new version exists (restarts the server)"),
+        ("check-update", "Check for updates without acting"),
+        ("monitor", "Run the monitor in the foreground (normally run by systemd)"),
+        ("reload-monitor", "Restart the systemd monitor without stopping the server"),
+    ]
+    rows += [(k, v[0]) for k, v in a.extra_commands().items()]
+    for k, v in rows:
+        print(f"  {k:<16} {v}")
+
+
+def run_instance(name: str, cmd: str, args: list[str]) -> int:
+    a = make_adapter(name)
+    extras = a.extra_commands()
+    if cmd == "start":
+        a.hold_file.unlink(missing_ok=True)
+        return 0 if a.start() else 1
+    if cmd == "stop":
+        a.hold_file.touch()
+        a.log("Hold set: the monitor won't restart this server until 'gsm start'")
+        return 0 if a.stop() else 1
+    if cmd == "restart":
+        a.hold_file.touch()  # keep the monitor from racing us during the gap
+        try:
+            a.stop()
+            time.sleep(5)
+        finally:
+            a.hold_file.unlink(missing_ok=True)
+        return 0 if a.start() else 1
+    if cmd == "status":
+        held = a.hold_file.exists()
+        state = "RUNNING" if a.is_running() else "STOPPED"
+        print(f"{state}{'  (HELD — monitor will not restart it)' if held else ''}")
+        for line in a.status_lines():
+            print(f"  {line}")
+        return 0
+    if cmd == "update":
+        a.hold_file.touch()
+        try:
+            return a.manual_update()
+        finally:
+            a.hold_file.unlink(missing_ok=True)
+    if cmd == "check-update":
+        try:
+            current, latest = a.check_update()
+        except NotImplementedError:
+            print("This adapter has no version check; 'update' pulls the latest image.")
+            return 0
+        print("Up to date" if current == latest else f"Update available: {current} -> {latest}")
+        return 0
+    if cmd == "monitor":
+        return Monitor(a).run()
+    if cmd == "reload-monitor":
+        return subprocess.call(["systemctl", "--user", "kill", "-s", "HUP", "--kill-whom=main", f"gsm@{name}"])
+    if cmd in extras:
+        return extras[cmd][1](args)
+    instance_help(a)
+    return 0 if cmd in ("help", "-h", "--help") else 1
+
+
+def main(argv: list[str]) -> int:
+    try:
+        if not argv or argv[0] in ("-h", "--help", "help"):
+            print(__doc__.strip())
+            print("\nInstances:", ", ".join(config.list_instances()) or "(none)")
+            return 0
+        if argv[0] == "version":
+            print(f"game-server-manager {VERSION}")
+            return 0
+        if argv[0] == "list":
+            return cmd_list()
+        if argv[0] == "notify":
+            msg = " ".join(argv[1:]) or "test"
+            n = Notifier(config.load_global())
+            if not n.enabled:
+                config.die(f"Telegram not configured in {config.GLOBAL_CONFIG}")
+            return 0 if n.send(None, msg, dedupe=0) else 1
+        if argv[0] == "install-service":
+            return cmd_install_service()
+        if len(argv) < 2:
+            argv.append("help")
+        return run_instance(argv[0], argv[1], argv[2:])
+    except config.ConfigError as e:
+        config.die(str(e))
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,19 @@
+# Minecraft Java Edition server
+adapter = "minecraft_java"
+server_dir = "~/minecraft-java-server"
+server_jar = "server.jar"
+screen_name = "minecraft-java-server"
+min_ram = "2G"
+max_ram = "8G"
+
+# Clients must run the same version as the server, so auto-update forces everyone
+# to update their game. Set false to update manually with `gsm <instance> update`.
+auto_update = false
+update_check_time = "03:00"
+max_backups = 5
+
+# Set true only after reading https://www.minecraft.net/en-us/eula
+auto_accept_eula = false
+
+[gamerules]
+# keepInventory = true

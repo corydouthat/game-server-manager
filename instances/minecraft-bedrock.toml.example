@@ -1,0 +1,19 @@
+# Minecraft Bedrock Dedicated Server
+adapter = "minecraft_bedrock"
+server_dir = "~/minecraft-bedrock-server"
+server_binary = "bedrock_server"
+screen_name = "minecraft-server"
+
+update_check_time = "03:00"   # daily, first check at/after this time
+auto_update = true
+max_backups = 5               # full server-dir backups kept next to server_dir
+# log_file = ""               # default: ~/.local/state/gsm/<instance>/<instance>.log
+
+# NetherNet (1.26.61+): keep server-udp-ports = <public IP>:<port>:<port> in sync with
+# your home IP so players coming through a port forward can connect. Checked every 10 min.
+sync_public_ip = true
+
+[gamerules]
+keepInventory = true
+playersSleepingPercentage = 30
+showCoordinates = true

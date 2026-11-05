@@ -1,0 +1,9 @@
+# RuneScape: Dragonwilds (Docker Compose)
+adapter = "dragonwilds"
+compose_dir = "~/repos/runescape-dragonwilds-server-docker"
+container = "runescape-dragonwilds"
+
+# Nightly: back up saves, docker compose pull, recreate container (updates from Steam).
+update_check_time = "03:00"
+auto_update = true
+max_backups = 5               # save backups kept in compose_dir

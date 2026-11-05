@@ -1,0 +1,21 @@
+# Installed by `gsm install-service` (which fills in @GSM@).
+# Enable per instance:  systemctl --user enable --now gsm@<instance>
+[Unit]
+Description=Game server monitor (%i)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@GSM@ %i monitor
+Environment=PYTHONUNBUFFERED=1
+# Monitor crashed or got SIGHUP (reload-monitor, exit 75): bring it back.
+Restart=on-failure
+RestartSec=30
+# SIGTERM goes to the monitor only; it stops the game gracefully before exiting.
+# Game processes run in their own scope, so a monitor restart doesn't kill them.
+KillMode=mixed
+TimeoutStopSec=150
+
+[Install]
+WantedBy=default.target
