@@ -1,161 +1,98 @@
-# Minecraft Server Manager
+# game-server-manager
 
-Bash scripts for managing a Minecraft **Bedrock** server and a Minecraft **Java** server on Linux. Both scripts use GNU `screen` for session management and provide auto-restart, update checking, and monitoring.
+One tool to run, monitor, update and get alerted about game servers on a Linux box.
+Python 3.11+ standard library only — no pip installs.
 
-## Scripts
+Supported out of the box:
 
-| Script | Purpose |
-|--------|---------|
-| `minecraft-bedrock-manager.sh` | Bedrock Dedicated Server (BDS) |
-| `minecraft-java-manager.sh` | Java Edition server |
+| Adapter | Game | Runtime |
+|---|---|---|
+| `minecraft_bedrock` | Minecraft Bedrock Dedicated Server | GNU `screen` |
+| `minecraft_java` | Minecraft Java Edition | GNU `screen` |
+| `dragonwilds` | RuneScape: Dragonwilds | Docker Compose |
 
----
+Each server is an **instance**: a TOML file in `instances/` naming its adapter and settings.
+A monitor per instance runs as a systemd user service. Alerts go to Telegram.
+
+## What the monitor does
+
+- Restarts the server if it goes down; alerts on each restart.
+- **Restart-loop protection:** 3 failed restarts in 15 min → one alert, then back off 30 min.
+- **Daily update** at `update_check_time`: once per day, skipped if already current,
+  deferred if players are online. Backs up before installing.
+- **Bedrock:** every 10 min, keeps `server-udp-ports` in `server.properties` pointed at your
+  current public IP (needed for NetherNet behind a port forward) and restarts once nobody's on.
+  Alerts if the console says players can't connect.
+- **Dragonwilds:** alerts when Docker silently restarts a crashed container.
+- One monitor per instance, enforced by a lock file.
 
 ## Requirements
 
-- `screen` — session management
-- `curl` or `wget` — downloads
-- `unzip` — Bedrock archive extraction
-- `java` (17+) — Java server only
-- `jq` or `python3` — recommended for reliable JSON parsing (required for Java updates)
+- Python 3.11+, `screen` (Minecraft), Docker + Compose (Dragonwilds), `java` (Minecraft Java)
+- systemd user session (for running monitors as services)
 
-Install on Fedora/RHEL: `sudo dnf install screen curl unzip jq java-21-openjdk-headless`
-
----
-
-## Quick Start
-
-### Bedrock
+## Setup
 
 ```bash
-chmod +x minecraft-bedrock-manager.sh
+cd game-server-manager
 
-# First run creates config at ./minecraft-bedrock-manager.conf
-# Edit it, then download the server:
-./minecraft-bedrock-manager.sh update
+# 1. Instances: copy an example per server and edit paths
+cp instances/minecraft-bedrock.toml.example instances/bedrock.toml
+chmod 640 instances/*.toml
 
-# Start monitoring (auto-restart + daily updates at 03:00)
-./minecraft-bedrock-manager.sh monitor
+# 2. Telegram (optional but recommended)
+cp global.toml.example global.toml && chmod 640 global.toml
+#    create a bot with @BotFather, put bot_token + chat_id in global.toml, then:
+./gsm notify "hello from gsm"
+
+# 3. Run monitors under systemd
+./gsm install-service
+loginctl enable-linger $USER            # once: start at boot without logging in
+systemctl --user enable --now gsm@bedrock
 ```
-
-### Java
-
-```bash
-chmod +x minecraft-java-manager.sh
-
-# First run creates config at ./minecraft-java-manager.conf
-# Set AUTO_ACCEPT_EULA=true after reading https://www.minecraft.net/en-us/eula
-# Then download the server JAR:
-./minecraft-java-manager.sh update
-
-# Start monitoring (auto-restart; auto-update is OFF by default)
-./minecraft-java-manager.sh monitor
-```
-
----
 
 ## Commands
 
-Both scripts share the same core commands:
-
 ```
-start        - Start the server
-stop         - Stop the server gracefully
-restart      - Stop then start
-update       - Stop, update to latest version, start
-check-update - Check if a newer version exists (no action taken)
-status       - Show running/stopped status and version
-monitor      - Start with auto-restart loop (default action)
-version      - Show manager script version
+gsm list                          all instances + status
+gsm notify <message>              send through the Telegram relay (usable from other scripts)
+gsm <instance> start              start (and clear a hold)
+gsm <instance> stop               stop and HOLD — the monitor won't restart it until 'start'
+gsm <instance> restart
+gsm <instance> status
+gsm <instance> update             update now if a new version exists
+gsm <instance> check-update
+gsm <instance> reload-monitor     restart the systemd monitor without touching the server
+gsm <instance> help               includes adapter-specific commands:
+    bedrock:     sync-ip
+    java:        whitelist add|remove|list|on|off
+    dragonwilds: backup, logs
 ```
 
-### Java: whitelist management
+Console access is unchanged for screen-based servers: `screen -r <screen_name>` (detach with Ctrl-A D).
+Logs: the instance's `log_file` and `journalctl --user -u gsm@<instance>`.
+
+`systemctl --user stop gsm@<instance>` stops the server gracefully too.
+
+## Adding a game
+
+1. If it runs in `screen` or Docker Compose, start from the closest adapter in
+   `gsm_core/adapters/` (Dragonwilds is ~150 lines).
+2. Subclass `GameAdapter` (`gsm_core/adapters/base.py`) and implement `is_running`, `start`, `stop`;
+   optionally `players_online`, `current_version`/`latest_version`/`install_update`
+   (or override `daily_update`), `health_check`, `reconcile`, `extra_commands`.
+3. Add `instances/<name>.toml` with `adapter = "<module name>"`.
+
+Restart handling, update scheduling, holds, locking and notifications come from the core.
+
+## Tests
 
 ```bash
-./minecraft-java-manager.sh whitelist list
-./minecraft-java-manager.sh whitelist add PlayerName
-./minecraft-java-manager.sh whitelist remove PlayerName
-./minecraft-java-manager.sh whitelist on
-./minecraft-java-manager.sh whitelist off
+python3 -m unittest discover -s tests
 ```
 
-`add` and `remove` work whether the server is running or not. When the server is offline they call the Mojang API to look up the player's UUID.
+## Legacy
 
----
-
-## Configuration
-
-Copy the `.conf.example` file for your platform and edit it:
-
-```bash
-cp minecraft-java-manager.conf.example minecraft-java-manager.conf
-# or
-cp minecraft-bedrock-manager.conf.example minecraft-bedrock-manager.conf
-```
-
-The scripts auto-generate a config with defaults on first run if one isn't present.
-
-### Key Java options
-
-| Setting | Default | Notes |
-|---------|---------|-------|
-| `SERVER_JAR` | `server.jar` | JAR filename in `SERVER_DIR` |
-| `MIN_RAM` / `MAX_RAM` | `2G` / `8G` | Java heap size |
-| `AUTO_ACCEPT_EULA` | `false` | Set true after reading the EULA |
-| `AUTO_UPDATE` | `false` | See version mismatch note below |
-
-### Key Bedrock options
-
-| Setting | Default | Notes |
-|---------|---------|-------|
-| `SERVER_BINARY` | `bedrock_server` | Binary name in `SERVER_DIR` |
-| `GAMERULES_STRING` | see example | Applied on every start |
-| `UPDATE_CHECK_TIME` | `03:00` | Daily update window (24h) |
-
----
-
-## Java version mismatch
-
-Java Edition clients must run the **exact same version** as the server. When you run `update`, the manager prints a clear warning:
-
-```
-*** ALL CLIENTS MUST UPDATE TO VERSION X.X.X ***
-```
-
-`AUTO_UPDATE` in the Java config defaults to `false` so you control when updates happen. Use `check-update` to see if a newer version is available without touching the running server.
-
----
-
-## Security notes
-
-- **Never commit `server.properties`** — it contains `rcon.password` and `management-server-secret`.
-- **Never commit `*.conf` files** — they contain local paths and may be extended with secrets.
-- **Never commit `whitelist.json` / `ops.json`** — player UUIDs are personal data.
-- All of the above are already covered by `.gitignore`.
-- Config files are created with `640` permissions (`chmod o-w` enforced at load time).
-
----
-
-## Running as a service
-
-To survive reboots, add a crontab entry:
-
-```bash
-@reboot /path/to/minecraft-java-manager.sh monitor >> /path/to/minecraft-java-manager.log 2>&1 &
-```
-
-Or create a systemd unit (recommended for production):
-
-```ini
-[Unit]
-Description=Minecraft Java Server
-After=network.target
-
-[Service]
-User=minecraft
-ExecStart=/path/to/minecraft-java-manager.sh monitor
-Restart=no
-
-[Install]
-WantedBy=multi-user.target
-```
+`legacy/` holds the previous bash managers (Minecraft, and Dragonwilds — merged with its
+git history from the former `dragonwilds-manager` repo). They'll be removed once the
+Python manager has run in production for a while.
